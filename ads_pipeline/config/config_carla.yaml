@@ -1,0 +1,18 @@
+sensor_manager:
+  ros__parameters:
+    camera.width: 1280
+    camera.height: 720
+    camera.fov: 90
+
+    lidar_range: 100
+    lidar_channels: 32
+    lidar_points_per_second: 100000
+    rotation_frequency: 20
+    
+    imu_update_rate: 100
+
+    lidar_topic : /carla/lidar/points
+    camera_topic : /carla/camera/rgb/image
+    imu_topic : /carla/imu/data
+    vehicle_blueprint : vehicle.tesla.model3
+
