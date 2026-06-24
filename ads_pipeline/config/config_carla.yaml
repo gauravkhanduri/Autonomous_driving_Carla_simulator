@@ -4,9 +4,9 @@ sensor_manager:
     camera.height: 720
     camera.fov: 90
 
-    lidar_range: 100
-    lidar_channels: 32
-    lidar_points_per_second: 100000
+    range: 100
+    channels: 32
+    points_per_second: 100000
     rotation_frequency: 20
     
     imu_update_rate: 100
