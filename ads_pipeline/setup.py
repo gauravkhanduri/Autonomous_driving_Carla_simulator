@@ -24,7 +24,8 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'sensor_manager = ads_pipeline.sensor_manager:main'
+            'sensor_manager = ads_pipeline.sensor_manager:main',
+            'projection_node = ads_pipeline.projection_Lidar_cam:main'
         ],
     },
 )

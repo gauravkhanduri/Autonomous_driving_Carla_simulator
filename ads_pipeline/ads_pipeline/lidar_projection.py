@@ -11,6 +11,8 @@ def build_intrinsic_matrix(image_w: int, image_h:int, fov_deg: float) -> np.ndar
     """
 
     focal_length = image_w / (2 * np.tan(np.radians(fov_deg)/2.0))
+    # print(f'focal_length: {focal_length}')
+
 
     cx = image_w/2.0
     cy = image_h/2.0
@@ -61,6 +63,9 @@ def projection_lidar_to_image(points_xyz: np.ndarray, K: np.ndarray, T_cam_lidar
 
      # Transform to camera coordinate frame
      pts_cam = T_cam_lidar @ pts_hom # (4,N)
+
+     print(f'pts_cam Z range: {pts_cam[2,:].min():.2f} to {pts_cam[2,:].max():.2f}')
+
      
      #keep only points in from of the camera (position Z)
      in_front = pts_cam[2,:] > 0.1
@@ -68,10 +73,12 @@ def projection_lidar_to_image(points_xyz: np.ndarray, K: np.ndarray, T_cam_lidar
 
      #project to image plane
      pts_proj = K @ pts_cam[:3,:] # (3,M)
+
      pts_proj /=pts_proj[2:3,:]   #normalize by Z
      
      u = pts_proj[0,:].astype(int)
      v = pts_proj[1,:].astype(int)
+    #  print(f'u range: {u.min()} to {u.max()}, v range: {v.min()} to {v.max()}')
      depth = pts_cam[2,:]
 
      # keep only pixels only image bound
@@ -79,10 +86,12 @@ def projection_lidar_to_image(points_xyz: np.ndarray, K: np.ndarray, T_cam_lidar
      valid = (u>=0) &(u< image_w) & (v>=0) & (v < image_h)
      return np.stack([u[valid], v[valid]], axis =1), depth[valid]
 
+
 def colorize_depth(depth: np.ndarray, max_depth: float = 50.0) -> np.ndarray:
     """ map depth values to BGR colors using a jet colormap."""
     normalized = np.clip(depth / max_depth, 0.0, 1.0)
     normalized = (normalized * 255).astype(np.uint8)
+    normalized = normalized.reshape(-1,1)
     colored = cv2.applyColorMap(normalized, cv2.COLORMAP_JET)
     return colored.squeeze() # (M, 3)
 
