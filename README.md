@@ -59,8 +59,9 @@ Install ROS 2 dependencies:
 ```bash
 sudo apt install ros-$ROS_DISTRO-cv-bridge \
                  ros-$ROS_DISTRO-sensor-msgs \
-                 ros-$ROS_DISTRO-nav-msgs \
-                 ros-$ROS_DISTRO-tf2-ros
+                 ros-$ROS_DISTRO-rosbag2 \
+                 python3-opencv python3-numpy
+pip install ros2-numpy
 ```
 
 The CARLA Python API (`carla` package) must be on your `PYTHONPATH`. Refer to the [CARLA Python API documentation](https://carla.readthedocs.io/en/latest/python_api/) for installation instructions.

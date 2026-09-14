@@ -4,96 +4,99 @@ import numpy as np
 import cv2
 
 
-def build_intrinsic_matrix(image_w: int, image_h:int, fov_deg: float) -> np.ndarray:
+# Rotation from a ROS body frame (x forward, y left, z up) to the
+# OpenCV camera optical frame (x right, y down, z forward).
+R_OPTICAL_FROM_BODY = np.array([
+    [0.0, -1.0, 0.0],
+    [0.0, 0.0, -1.0],
+    [1.0, 0.0, 0.0],
+], dtype=np.float64)
+
+
+def build_intrinsic_matrix(image_w: int, image_h: int, fov_deg: float) -> np.ndarray:
     """
-        Comoute the 3x3 pinhole intrinsic matrix K from image dimensions and horizonatal field 
+        Compute the 3x3 pinhole intrinsic matrix K from image dimensions and horizontal field
         of view.
     """
 
-    focal_length = image_w / (2 * np.tan(np.radians(fov_deg)/2.0))
-    # print(f'focal_length: {focal_length}')
+    focal_length = image_w / (2 * np.tan(np.radians(fov_deg) / 2.0))
 
-
-    cx = image_w/2.0
-    cy = image_h/2.0
+    cx = image_w / 2.0
+    cy = image_h / 2.0
 
     K = np.array([
         [focal_length, 0.0, cx],
         [0, focal_length, cy],
         [0, 0, 1],
-    ],dtype=np.float64)
+    ], dtype=np.float64)
 
     return K
 
+
 def build_extrinsic(lidar_loc: tuple, camera_loc: tuple) -> np.ndarray:
     """
-    Build the 4x4 extrinsic transform from lidar to camera frame.
-    both locations are (x,y,z) in CARLA vehicle coordinatte
+    Build the 4x4 transform T_cam_lidar that maps points from the LiDAR frame
+    (ROS convention: x forward, y left, z up) into the camera optical frame
+    (x right, y down, z forward).
+
+    Both locations are (x, y, z) mount positions in CARLA vehicle coordinates (y right).
+    Assumes both sensors face forward with no rotation offset.
     """
-    #translation vector: camera position minus LiDAR position
-
-    tx = camera_loc[0] - lidar_loc[0]
-    ty = camera_loc[1] - lidar_loc[1]
-    tz = camera_loc[2] - lidar_loc[2]
-
-    # For Co-planner sensors with no rotation difference, R=I
-    # Replace with actual position if sensors  are angled differently
-
-    R = np.eye(3,dtype=np.float64)
-    t = np.array([
-        [tx], [ty], [tz]
+    # LiDAR origin relative to the camera, in the ROS body frame (CARLA y flipped)
+    t_body = np.array([
+        lidar_loc[0] - camera_loc[0],
+        -(lidar_loc[1] - camera_loc[1]),
+        lidar_loc[2] - camera_loc[2],
     ], dtype=np.float64)
 
-    T  = np.hstack([R,t]) # 3x4
-    T = np.vstack([T,[0,0,0,1]]) # 4x4
+    T = np.eye(4, dtype=np.float64)
+    T[:3, :3] = R_OPTICAL_FROM_BODY
+    T[:3, 3] = R_OPTICAL_FROM_BODY @ t_body
 
     return T
 
+
 def projection_lidar_to_image(points_xyz: np.ndarray, K: np.ndarray, T_cam_lidar: np.ndarray,
-                              image_w: int, image_h: int,) -> tuple:
+                              image_w: int, image_h: int) -> tuple:
+    """
+    Project (N,3) LiDAR points onto the image plane.
 
-     """
-     Returns: 
-        pixels -- (M,2) array of (u,v) coodinates
+    Returns:
+        pixels -- (M,2) array of (u,v) coordinates
         depths -- (M,) array of depth values for coloring
-     """ 
-     N = points_xyz.shape[0]
-     ones = np.ones((N,1),dtype=np.float64)
-     pts_hom = np.hstack([points_xyz,ones]).T # (4,N)
+    """
+    N = points_xyz.shape[0]
+    ones = np.ones((N, 1), dtype=np.float64)
+    pts_hom = np.hstack([points_xyz.astype(np.float64), ones]).T  # (4,N)
 
-     # Transform to camera coordinate frame
-     pts_cam = T_cam_lidar @ pts_hom # (4,N)
+    # Transform to camera coordinate frame
+    pts_cam = T_cam_lidar @ pts_hom  # (4,N)
 
-     print(f'pts_cam Z range: {pts_cam[2,:].min():.2f} to {pts_cam[2,:].max():.2f}')
+    #keep only points in front of the camera (positive Z)
+    in_front = pts_cam[2, :] > 0.1
+    pts_cam = pts_cam[:, in_front]
 
-     
-     #keep only points in from of the camera (position Z)
-     in_front = pts_cam[2,:] > 0.1
-     pts_cam = pts_cam[:,in_front]
+    #project to image plane
+    pts_proj = K @ pts_cam[:3, :]  # (3,M)
+    pts_proj /= pts_proj[2:3, :]   #normalize by Z
 
-     #project to image plane
-     pts_proj = K @ pts_cam[:3,:] # (3,M)
+    u = np.round(pts_proj[0, :]).astype(int)
+    v = np.round(pts_proj[1, :]).astype(int)
+    depth = pts_cam[2, :]
 
-     pts_proj /=pts_proj[2:3,:]   #normalize by Z
-     
-     u = pts_proj[0,:].astype(int)
-     v = pts_proj[1,:].astype(int)
-    #  print(f'u range: {u.min()} to {u.max()}, v range: {v.min()} to {v.max()}')
-     depth = pts_cam[2,:]
-
-     # keep only pixels only image bound
-
-     valid = (u>=0) &(u< image_w) & (v>=0) & (v < image_h)
-     return np.stack([u[valid], v[valid]], axis =1), depth[valid]
+    # keep only pixels inside the image bounds
+    valid = (u >= 0) & (u < image_w) & (v >= 0) & (v < image_h)
+    return np.stack([u[valid], v[valid]], axis=1), depth[valid]
 
 
 def colorize_depth(depth: np.ndarray, max_depth: float = 50.0) -> np.ndarray:
-    """ map depth values to BGR colors using a jet colormap."""
+    """Map depth values to BGR colors using the JET colormap (blue = near, red = far)."""
     normalized = np.clip(depth / max_depth, 0.0, 1.0)
     normalized = (normalized * 255).astype(np.uint8)
-    normalized = normalized.reshape(-1,1)
+    normalized = normalized.reshape(-1, 1)
     colored = cv2.applyColorMap(normalized, cv2.COLORMAP_JET)
-    return colored.squeeze() # (M, 3)
+    return colored.reshape(-1, 3)  # (M, 3)
+
 
 def overlay_projection(image_bgr: np.ndarray,
                        pixels: np.ndarray,
@@ -101,10 +104,7 @@ def overlay_projection(image_bgr: np.ndarray,
                        dot_size: int = 3) -> np.ndarray:
     """Draw colored LiDAR dots onto the image"""
     result = image_bgr.copy()
-    for(u,v), color in zip(pixels,colors):
-        cv2.circle(result,(u,v), dot_size, color.tolist(),-1)
-    
+    for (u, v), color in zip(pixels, colors):
+        cv2.circle(result, (int(u), int(v)), dot_size, color.tolist(), -1)
+
     return result
-
-
-        

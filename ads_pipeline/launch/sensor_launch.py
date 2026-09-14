@@ -37,7 +37,6 @@ def generate_launch_description():
             },
         ],
     )
-    
 
     return LaunchDescription([
         host_arg,

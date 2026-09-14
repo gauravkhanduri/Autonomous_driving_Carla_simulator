@@ -58,7 +58,10 @@ ads_pipeline/
 ├── ads_pipeline/
 │   ├── sensor_manager.py        # SensorManager ROS 2 node
 │   ├── projection_Lidar_cam.py  # ProjectionNode — LiDAR-to-camera overlay
-│   └── lidar_projection.py      # Projection math library (K, T, colorize, overlay)
+│   ├── lidar_projection.py      # Projection math library (K, T, colorize, overlay)
+│   ├── kalman_filter.py         # Constant-velocity 2-D Kalman filter
+│   └── multisensor_kf.py        # Standalone LiDAR + radar target fusion script (non-ROS)
+├── test/                        # pytest unit tests (projection math, KF, target extraction)
 ├── config/
 │   └── config_carla.yaml        # Sensor parameters and topic names
 ├── launch/
@@ -85,7 +88,7 @@ ads_pipeline/
 | `cv_bridge` | from `ros-<distro>-cv-bridge` |
 | `ros2_numpy` | for structured PointCloud2 deserialization |
 | `opencv-python` | for image processing and colormap |
-| `sensor_msgs`, `std_msgs` | standard ROS 2 packages |
+| `sensor_msgs`, `std_msgs`, `launch_ros`, `ros2bag` | standard ROS 2 packages |
 
 CARLA must be running and reachable at `localhost:2000` before launching this package.
 
@@ -159,7 +162,11 @@ Optional arguments:
 ros2 launch ads_pipeline record_launch.py
 ```
 
+`record_launch.py` includes `sensor_launch.py`, so it loads the same `config_carla.yaml` and accepts the same `host`, `port` and `spawn_index` arguments.
+
 Stop with `Ctrl+C`. Both processes terminate cleanly and the bag is finalized automatically.
+
+> **Disk usage:** uncompressed 1920×1080 images are ~6 MB each, so a bag grows by several GB per minute.
 
 ### LiDAR-to-camera projection node
 
@@ -169,7 +176,25 @@ With the sensor node running, start the projection node in a second terminal:
 ros2 run ads_pipeline projection_node
 ```
 
-The overlay image is written to `~/results/projection_result.png` on every camera frame.
+The overlay image is written to `~/results/projection_result.png` on every camera frame (the directory is created if needed). Parameters: `camera_topic`, `lidar_topic`, `camera.fov` (default 90), `max_depth` (default 50 m), `output_path`. The intrinsic matrix is built from the incoming image size.
+
+### Multi-sensor Kalman filter (standalone)
+
+With CARLA running (no ROS nodes needed):
+
+```bash
+ros2 run ads_pipeline multisensor_kf -- --town Town03          # OpenCV window, press q to quit
+ros2 run ads_pipeline multisensor_kf -- --no-display --duration 30
+```
+
+The script spawns an ego vehicle and a second vehicle, extracts the nearest LiDAR return and radar detection inside a ±15° forward cone, and fuses them with the constant-velocity filter in `kalman_filter.py`. The estimated target position and velocity (ego-vehicle frame) are drawn on the camera image.
+
+### Tests
+
+```bash
+cd ~/carla_ws/src/Autonomous_driving_Carla_simulator/ads_pipeline
+python3 -m pytest test
+```
 
 ### Live visualization in RViz2
 
@@ -188,24 +213,22 @@ The projection pipeline is split across two files:
 | Function | Description |
 |---|---|
 | `build_intrinsic_matrix(w, h, fov_deg)` | Computes the 3×3 pinhole camera matrix **K** from image dimensions and horizontal FOV |
-| `build_extrinsic(lidar_loc, camera_loc)` | Builds the 4×4 rigid-body transform **T** from LiDAR to camera frame (translation only; assumes co-planar sensors with no rotation offset) |
+| `build_extrinsic(lidar_loc, camera_loc)` | Builds the 4×4 transform **T** from the LiDAR frame (ROS convention) to the camera optical frame: mount offset plus the fixed axis rotation (assumes both sensors face forward) |
 | `projection_lidar_to_image(points_xyz, K, T, w, h)` | Projects pre-transformed 3-D points onto the image plane; returns `(u, v)` pixel coordinates and per-point depth values |
 | `colorize_depth(depth, max_depth)` | Maps depth values to BGR colors using OpenCV's JET colormap |
 | `overlay_projection(image_bgr, pixels, colors)` | Draws depth-colored filled circles onto the BGR image |
 
 ### `projection_Lidar_cam.py` — ROS 2 node
 
-`ProjectionNode` subscribes to the LiDAR and camera topics independently, caches the latest message from each, and triggers projection on every incoming camera frame.
+`ProjectionNode` subscribes to the LiDAR and camera topics independently, caches the latest LiDAR message, and triggers projection on every incoming camera frame.
 
-**Coordinate conversion** — CARLA uses a left-handed coordinate system. Before projection the node remaps each LiDAR point:
+**Coordinate conversion** — `SensorManager` already publishes LiDAR points in the ROS convention (x forward, y left, z up; CARLA's y is flipped). `T_cam_lidar` first adds the LiDAR-to-camera mount offset, then rotates into the OpenCV optical frame:
 
 ```
-camera_X =  CARLA_Y
-camera_Y = -CARLA_Z
-camera_Z = -CARLA_X   (depth / forward)
+camera_X = -y   (right)
+camera_Y = -z   (down)
+camera_Z =  x   (depth / forward)
 ```
-
-After the remap, `T_cam_lidar = I` (identity) because the coordinate conversion already accounts for the sensor offset at the default mount positions.
 
 **Default sensor mounts (vehicle-relative):**
 
@@ -218,7 +241,7 @@ After the remap, `T_cam_lidar = I` (identity) because the coordinate conversion 
 
 ![LiDAR projected onto camera image](docs/projection_result.png)
 
-*Depth-colorized LiDAR points (JET colormap, max depth 50 m) overlaid on the 1920×1080 front RGB camera. Blue = far, red = near.*
+*Depth-colorized LiDAR points (JET colormap, max depth 50 m) overlaid on the 1920×1080 front RGB camera. Blue = near, red = far.*
 
 ---
 
@@ -226,11 +249,11 @@ After the remap, `T_cam_lidar = I` (identity) because the coordinate conversion 
 
 | Topic | Message Type | Description |
 |---|---|---|
-| `/carla/camera/rgb/image` | `sensor_msgs/Image` | 1920×1080 RGB front camera, 90° FOV |
-| `/carla/lidar/points` | `sensor_msgs/PointCloud2` | 32-channel ray-cast LiDAR, 100 m range, `x y z intensity` fields |
-| `/carla/imu/data` | `sensor_msgs/Imu` | Linear acceleration and angular velocity from CARLA's IMU |
+| `/carla/camera/rgb/image` | `sensor_msgs/Image` | 1920×1080 `bgr8` front camera, 90° FOV, frame `camera_rgb_front` |
+| `/carla/lidar/points` | `sensor_msgs/PointCloud2` | 32-channel ray-cast LiDAR, 100 m range, `x y z intensity` fields, frame `lidar` |
+| `/carla/imu/data` | `sensor_msgs/Imu` | Linear acceleration and angular velocity at `imu_update_rate` Hz, frame `imu` (orientation not provided) |
 
-All messages carry a `header.stamp` set from the ROS 2 clock at callback time.
+LiDAR and IMU data are converted from CARLA's left-handed frame to the ROS right-handed convention (x forward, y left, z up). All messages carry a `header.stamp` taken from the CARLA simulation time of the measurement, so samples from the same simulation tick share a stamp.
 
 ---
 
