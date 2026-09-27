@@ -1,0 +1,36 @@
+{
+  "n_cores": 24,
+  "samples": 173,
+  "CarlaUE4-Linux_cpu": {
+    "mean": 159.99075144508672,
+    "p95": 195.26000000000022,
+    "peak": 233.0
+  },
+  "CarlaUE4-Linux_rss_mb": {
+    "steady": 3408.921875,
+    "peak": 3408.92578125
+  },
+  "projection_node_cpu": {
+    "mean": 52.00988372093024,
+    "p95": 79.195,
+    "peak": 89.9
+  },
+  "projection_node_rss_mb": {
+    "steady": 183.140625,
+    "peak": 227.26171875
+  },
+  "sensor_manager_cpu": {
+    "mean": 101.94850299401196,
+    "p95": 107.3,
+    "peak": 109.2
+  },
+  "sensor_manager_rss_mb": {
+    "steady": 491.56640625,
+    "peak": 527.44140625
+  },
+  "system_cpu": {
+    "mean": 13.850867052023121,
+    "p95": 15.6,
+    "peak": 32.0
+  }
+}

@@ -1,3 +1,8 @@
+import json
+import os
+import signal
+import time
+
 import carla
 import numpy as np
 import rclpy
@@ -34,6 +39,14 @@ class SensorManager(Node):
 
         self.declare_parameter('imu_update_rate', 100)
 
+        # benchmarking: published-frame counts are written here on shutdown ('' = off)
+        self.declare_parameter('bench.stats_dir', '')
+        # stamp messages with wall-clock time instead of CARLA sim time, so downstream
+        # nodes can measure end-to-end latency
+        self.declare_parameter('bench.wall_stamps', False)
+        self.wall_stamps = bool(self.get_parameter('bench.wall_stamps').value)
+        self.published = {'camera': 0, 'lidar': 0, 'imu': 0}
+
         host = self.get_parameter('host').value
         port = self.get_parameter('port').value
 
@@ -57,11 +70,10 @@ class SensorManager(Node):
         self._attach_sensors()
         self.get_logger().info('SensorManager initialized.')
 
-    @staticmethod
-    def _stamp(sensor_data):
+    def _stamp(self, sensor_data):
         """Header stamp from the CARLA simulation time of the measurement, so that
         camera, LiDAR and IMU samples from the same simulation tick share a stamp."""
-        t = sensor_data.timestamp
+        t = time.time() if self.wall_stamps else sensor_data.timestamp
         sec = int(t)
         return Time(sec=sec, nanosec=int((t - sec) * 1e9))
 
@@ -103,6 +115,7 @@ class SensorManager(Node):
         msg.header.stamp = self._stamp(carla_image)
         msg.header.frame_id = 'camera_rgb_front'
         self.cam_pub_.publish(msg)
+        self.published['camera'] += 1
 
     def _attach_lidar(self):
         bp = self.blueprint_lib.find('sensor.lidar.ray_cast')
@@ -155,6 +168,7 @@ class SensorManager(Node):
         msg.is_dense = True
         msg.data = points.tobytes()
         self.lidar_pub_.publish(msg)
+        self.published['lidar'] += 1
 
     def _attach_imu(self):
         bp = self.blueprint_lib.find('sensor.other.imu')
@@ -184,6 +198,16 @@ class SensorManager(Node):
         # orientation is not estimated
         msg.orientation_covariance[0] = -1.0
         self.imu_pub_.publish(msg)
+        self.published['imu'] += 1
+
+    def dump_stats(self):
+        stats_dir = os.path.expanduser(self.get_parameter('bench.stats_dir').value)
+        if not stats_dir:
+            return
+        os.makedirs(stats_dir, exist_ok=True)
+        with open(os.path.join(stats_dir, 'published.json'), 'w') as f:
+            json.dump(self.published, f, indent=2)
+        self.get_logger().info(f'published counts written to {stats_dir}: {self.published}')
 
     def destroy_actors(self):
         self.get_logger().info('destroying actors...')
@@ -204,6 +228,9 @@ def main(args=None):
     # Handle Ctrl+C ourselves: rclpy's default handler invalidates the context while CARLA
     # sensor threads are still publishing. Sensors are stopped before shutdown instead.
     # spin_once with a timeout returns to Python regularly so KeyboardInterrupt is delivered.
+    # Background processes started by a non-interactive shell inherit SIGINT as ignored, and
+    # Python then keeps it ignored; restore the default so Ctrl+C / kill -INT always stops the node.
+    signal.signal(signal.SIGINT, signal.default_int_handler)
     rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
     node = SensorManager()
     try:
@@ -213,6 +240,7 @@ def main(args=None):
         pass
     finally:
         node.destroy_actors()
+        node.dump_stats()
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

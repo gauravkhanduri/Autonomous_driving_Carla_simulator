@@ -27,6 +27,8 @@ setup(
             'sensor_manager = ads_pipeline.sensor_manager:main',
             'projection_node = ads_pipeline.projection_Lidar_cam:main',
             'multisensor_kf = ads_pipeline.multisensor_kf:main',
+            'bench_replay = ads_pipeline.bench_replay:main',
+            'bench_resources = ads_pipeline.bench_resources:main',
         ],
     },
 )

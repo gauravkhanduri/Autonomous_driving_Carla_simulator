@@ -1,0 +1,27 @@
+{
+  "n_cores": 24,
+  "samples": 106,
+  "bench_replay_cpu": {
+    "mean": 13.7980198019802,
+    "p95": 15.4,
+    "peak": 100.6
+  },
+  "bench_replay_rss_mb": {
+    "steady": 736.5625,
+    "peak": 736.5625
+  },
+  "projection_node_cpu": {
+    "mean": 52.825714285714284,
+    "p95": 89.05999999999999,
+    "peak": 105.6
+  },
+  "projection_node_rss_mb": {
+    "steady": 237.3359375,
+    "peak": 238.265625
+  },
+  "system_cpu": {
+    "mean": 12.816037735849054,
+    "p95": 14.8,
+    "peak": 26.0
+  }
+}
