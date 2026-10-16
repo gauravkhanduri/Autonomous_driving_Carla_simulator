@@ -23,11 +23,12 @@ A ROS 2 workspace for autonomous driving research and sensor data collection usi
 | Sensor pipeline (camera, LiDAR, IMU → ROS 2) | Done | 1920×1080 camera at ~39 FPS live from CARLA |
 | LiDAR→camera projection | Done | 8.8 ms p95 per 1080p frame; sustains 60 FPS (ceiling ≈ 79) with 0.10 % drops when the overlay is published as a topic |
 | Multi-sensor Kalman filter (LiDAR + radar) | Done | Standalone CARLA script |
-| Perception dataset | Done | Synchronous Town01 day + night drives, 600 frames each at 20 Hz, RGB + depth + semantic + 3D actor boxes |
+| Perception dataset | Done | Synchronous Town01 day + night drives, 600 frames each at 20 Hz, RGB + depth + semantic + 3D actor boxes; 2D ground truth with occlusion handling (6,127 boxes per drive) |
 | Perception: YOLOv8s vs RT-DETR-L, AP/mAP, tracking (MOTA) | In progress | — |
 
 Details: [benchmark results](ads_pipeline/bench/results/2026-09-26/README.md) ·
 [perception dataset](ads_pipeline/README.md#perception-dataset-recording) ·
+[2D ground truth](ads_pipeline/README.md#2d-ground-truth-boxes) ·
 [roadmap](ads_pipeline/README.md#roadmap)
 
 ---

@@ -19,6 +19,7 @@ This ROS 2 package connects to a running CARLA server, spawns an ego vehicle, at
 - [Recorded Data](#recorded-data)
 - [Performance Benchmark](#performance-benchmark)
 - [Perception Dataset Recording](#perception-dataset-recording)
+- [2D Ground-Truth Boxes](#2d-ground-truth-boxes)
 - [Roadmap](#roadmap)
 - [Relationship to carla\_ros2\_bridge](#relationship-to-carla_ros2_bridge)
 
@@ -64,6 +65,7 @@ ads_pipeline/
 │   ├── lidar_projection.py      # Projection math library (K, T, colorize, overlay)
 │   ├── kalman_filter.py         # Constant-velocity 2-D Kalman filter
 │   ├── multisensor_kf.py        # Standalone LiDAR + radar target fusion script (non-ROS)
+│   ├── gt_boxes.py              # 2D ground-truth boxes from recorded drives (projection + visible pixels)
 │   ├── perf_stats.py            # Per-frame timing / counter collection and percentile summaries
 │   ├── bench_replay.py          # Replays a recorded bag at a fixed FPS (benchmarking)
 │   └── bench_resources.py       # Samples per-process CPU and memory (benchmarking)
@@ -73,7 +75,10 @@ ads_pipeline/
 │   ├── report.py                # Summarises run folders as a table
 │   └── results/                 # Dated benchmark results (README + raw CSV/JSON)
 ├── tools/
-│   └── record_drive.py          # Synchronous CARLA drive recorder for perception evaluation
+│   ├── record_drive.py          # Synchronous CARLA drive recorder for perception evaluation
+│   ├── build_gt.py              # Writes recordings/<drive>/gt.json (2D ground-truth boxes)
+│   └── show_frame.py            # Draws ground-truth boxes on recorded frames
+├── results/perception/          # Ground-truth overlays and error examples
 ├── test/                        # pytest unit tests (projection math, KF, target extraction, perf stats)
 ├── config/
 │   └── config_carla.yaml        # Sensor parameters and topic names
@@ -380,6 +385,46 @@ differences in detection come from lighting alone.
 
 ---
 
+## 2D Ground-Truth Boxes
+
+`ads_pipeline/gt_boxes.py` turns the recorded 3D actor boxes into 2D image boxes that cover only what the camera sees.
+For each vehicle and pedestrian within 120 m:
+
+1. Project the 8 corners of its 3D box into the image, cutting the box at a 0.1 m near plane → **loose box**.
+   Pedestrian boxes are widened by 0.3 m in length and width first, because CARLA walker boxes are tighter than the rendered body.
+2. Inside the loose box, keep the pixels whose semantic tag belongs to the actor and whose depth lies within the
+   actor's depth range (± 0.3 m) → **visible box** around those pixels.
+3. Drop actors with fewer than 10 visible pixels or a box under 8 px.
+
+Fully hidden actors get no box, and partly hidden actors get a box around their visible part.
+The CARLA→optical transform matches `carla.Transform.get_matrix()` (unit-tested).
+Because the boxes come from depth and segmentation rather than RGB, the clear and night drives have identical ground truth.
+
+```bash
+python3 tools/build_gt.py --rec recordings/clear         # → recordings/clear/gt.json
+python3 tools/show_frame.py --rec recordings/clear --frames 100 250 400 --out results/perception/overlays
+```
+
+**Ground truth for the recorded drives (2026-10-15):**
+
+| | Boxes | Per frame (mean / max) | Distinct actors |
+|---|---|---|---|
+| Vehicles | 3,097 | 5.2 / 9 | 18 |
+| Pedestrians | 3,030 | 5.0 / 16 | 25 |
+
+Same numbers for clear and night. Of about 144 actors within 120 m per frame, about 10 are visible.
+
+![Ground-truth boxes, clear frame 250](results/perception/overlays/clear_000250.jpg)
+
+Thick lines: visible box. Thin lines: projected 3D box. Green: vehicle. Red: pedestrian.
+
+**Known error:** the semantic camera labels the class, not the instance, so pedestrians walking side by side at the
+same depth can merge into overlapping boxes. This affects 88 of 6,127 boxes (1.4 %, 79 of them pedestrians);
+example: [clear frame 293](results/perception/gt_error_merged_pedestrians_clear_293.jpg).
+CARLA's instance-segmentation camera would fix it but needs a re-recording.
+
+---
+
 ## Roadmap
 
 | Phase | Status |
@@ -387,8 +432,8 @@ differences in detection come from lighting alone.
 | Sensor pipeline, LiDAR→camera projection, multi-sensor Kalman filter | Done |
 | Projection pipeline benchmark (FPS, latency, drops, CPU/RAM) | Done |
 | Perception 1 — synchronous day/night drive recording with ground-truth actor boxes | Done |
-| Perception 2 — 2D ground-truth boxes (corner projection + visible-pixel refinement) | Next |
-| Perception 3 — YOLOv8s vs RT-DETR-L detector node (`vision_msgs/Detection2DArray`) and timing | Planned |
+| Perception 2 — 2D ground-truth boxes (corner projection + visible-pixel refinement) | Done |
+| Perception 3 — YOLOv8s vs RT-DETR-L detector node (`vision_msgs/Detection2DArray`) and timing | Next |
 | Perception 4 — detector grading: AP, mAP@0.5, mAP@0.5:0.95, checked against pycocotools | Planned |
 | Perception 5 — SORT-style image tracker: ID switches and MOTA | Planned |
 | Perception 6 — live demo and day/night model recommendation | Planned |
