@@ -6,12 +6,29 @@ A ROS 2 workspace for autonomous driving research and sensor data collection usi
 
 ## Table of Contents
 
+- [Project Status](#project-status)
 - [Architecture](#architecture)
 - [Prerequisites](#prerequisites)
 - [Workspace Setup](#workspace-setup)
 - [Quick Start](#quick-start)
 - [Packages](#packages)
 - [External Dependencies](#external-dependencies)
+
+---
+
+## Project Status
+
+| Area | Status | Key results |
+|---|---|---|
+| Sensor pipeline (camera, LiDAR, IMU → ROS 2) | Done | 1920×1080 camera at ~39 FPS live from CARLA |
+| LiDAR→camera projection | Done | 8.8 ms p95 per 1080p frame; sustains 60 FPS (ceiling ≈ 79) with 0.10 % drops when the overlay is published as a topic |
+| Multi-sensor Kalman filter (LiDAR + radar) | Done | Standalone CARLA script |
+| Perception dataset | Done | Synchronous Town01 day + night drives, 600 frames each at 20 Hz, RGB + depth + semantic + 3D actor boxes |
+| Perception: YOLOv8s vs RT-DETR-L, AP/mAP, tracking (MOTA) | In progress | — |
+
+Details: [benchmark results](ads_pipeline/bench/results/2026-09-26/README.md) ·
+[perception dataset](ads_pipeline/README.md#perception-dataset-recording) ·
+[roadmap](ads_pipeline/README.md#roadmap)
 
 ---
 
@@ -50,7 +67,7 @@ The pipeline is intentionally single-entry: one `ros2 launch` command starts the
 |---|---|
 | Ubuntu | 22.04 (Humble) or 24.04 (Jazzy) |
 | ROS 2 | Humble or Jazzy |
-| CARLA Simulator | 0.9.13 or later |
+| CARLA Simulator | 0.9.13 or later (tested with 0.9.16) |
 | CARLA Python API | matching CARLA server version |
 | Python | 3.10+ |
 
@@ -115,7 +132,7 @@ Recorded bags are saved to `~/recorded_sensor_bag/sensor_bag_<timestamp>/`.
 
 | Package | Description | README |
 |---|---|---|
-| `ads_pipeline` | Core sensor pipeline — spawns ego vehicle, publishes RGB camera, LiDAR, and IMU data, and records to a ROS 2 bag. | [ads_pipeline/README.md](ads_pipeline/README.md) |
+| `ads_pipeline` | Core sensor pipeline — spawns ego vehicle, publishes RGB camera, LiDAR, and IMU data, records to a ROS 2 bag, projects LiDAR onto the camera, benchmarks the pipeline, and records synchronous drives for perception evaluation. | [ads_pipeline/README.md](ads_pipeline/README.md) |
 
 > Additional packages (perception, planning, control) will be added here as the project grows.
 

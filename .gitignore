@@ -1,3 +1,8 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+
+# perception phase: recorded drives and model weights live on the external SSD
+ads_pipeline/recordings
+recordings/
+*.pt

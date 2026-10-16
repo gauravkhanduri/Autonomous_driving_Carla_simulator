@@ -17,6 +17,9 @@ This ROS 2 package connects to a running CARLA server, spawns an ego vehicle, at
 - [LiDAR-to-Camera Projection](#lidar-to-camera-projection)
 - [Published Topics](#published-topics)
 - [Recorded Data](#recorded-data)
+- [Performance Benchmark](#performance-benchmark)
+- [Perception Dataset Recording](#perception-dataset-recording)
+- [Roadmap](#roadmap)
 - [Relationship to carla\_ros2\_bridge](#relationship-to-carla_ros2_bridge)
 
 ---
@@ -60,15 +63,26 @@ ads_pipeline/
 │   ├── projection_Lidar_cam.py  # ProjectionNode — LiDAR-to-camera overlay
 │   ├── lidar_projection.py      # Projection math library (K, T, colorize, overlay)
 │   ├── kalman_filter.py         # Constant-velocity 2-D Kalman filter
-│   └── multisensor_kf.py        # Standalone LiDAR + radar target fusion script (non-ROS)
-├── test/                        # pytest unit tests (projection math, KF, target extraction)
+│   ├── multisensor_kf.py        # Standalone LiDAR + radar target fusion script (non-ROS)
+│   ├── perf_stats.py            # Per-frame timing / counter collection and percentile summaries
+│   ├── bench_replay.py          # Replays a recorded bag at a fixed FPS (benchmarking)
+│   └── bench_resources.py       # Samples per-process CPU and memory (benchmarking)
+├── bench/
+│   ├── run_projection_bench.sh  # Replay benchmark of the projection node
+│   ├── run_live_bench.sh        # Live CARLA → sensor_manager → projection_node benchmark
+│   ├── report.py                # Summarises run folders as a table
+│   └── results/                 # Dated benchmark results (README + raw CSV/JSON)
+├── tools/
+│   └── record_drive.py          # Synchronous CARLA drive recorder for perception evaluation
+├── test/                        # pytest unit tests (projection math, KF, target extraction, perf stats)
 ├── config/
 │   └── config_carla.yaml        # Sensor parameters and topic names
 ├── launch/
 │   ├── sensor_launch.py         # Launches SensorManager only
 │   └── record_launch.py         # Launches SensorManager + bag recorder
 ├── docs/
-│   └── projection_result.png    # Sample LiDAR-on-camera overlay
+│   ├── projection_result.png    # Sample LiDAR-on-camera overlay
+│   └── perception_drive_preview.jpg  # Clear vs night frames from the recorded drives
 ├── rviz/
 │   └── ads_pipeline.rviz        # RViz2 configuration for live visualization
 ├── package.xml
@@ -176,7 +190,24 @@ With the sensor node running, start the projection node in a second terminal:
 ros2 run ads_pipeline projection_node
 ```
 
-The overlay image is written to `~/results/projection_result.png` on every camera frame (the directory is created if needed). Parameters: `camera_topic`, `lidar_topic`, `camera.fov` (default 90), `max_depth` (default 50 m), `output_path`. The intrinsic matrix is built from the incoming image size.
+The overlay image is written to `~/results/projection_result.png` on every camera frame (the directory is created if needed). The intrinsic matrix is built from the incoming image size.
+
+| Parameter | Default | Description |
+|---|---|---|
+| `camera_topic`, `lidar_topic` | `/carla/camera/rgb/image`, `/carla/lidar/points` | Input topics |
+| `camera.fov` | `90.0` | Horizontal FOV used to build **K** |
+| `max_depth` | `50.0` | Depth (m) mapped to the end of the colormap |
+| `output_path` | `~/results/projection_result.png` | Overlay PNG path |
+| `save_output` | `true` | Write the overlay PNG every frame (costs 60–130 ms at 1080p, see [benchmark](#performance-benchmark)) |
+| `overlay_topic` | `''` (off) | Publish the overlay as `sensor_msgs/Image` on this topic |
+| `bench.stats_dir` | `''` (off) | Write per-frame timings and counters here on shutdown |
+| `bench.wall_stamps` | `false` | Input stamps are wall-clock time, so end-to-end latency is measured |
+
+For live use at full frame rate, publish instead of writing PNGs:
+
+```bash
+ros2 run ads_pipeline projection_node --ros-args -p save_output:=false -p overlay_topic:=/carla/camera/rgb/overlay
+```
 
 ### Multi-sensor Kalman filter (standalone)
 
@@ -271,6 +302,96 @@ Each bag captures the three topics listed above. To inspect a recording:
 ros2 bag info ~/recorded_sensor_bag/sensor_bag_<timestamp>
 ros2 bag play ~/recorded_sensor_bag/sensor_bag_<timestamp>
 ```
+
+---
+
+## Performance Benchmark
+
+The projection pipeline (camera frame → LiDAR projection → depth overlay) was benchmarked at 1920×1080 on an
+Intel Core Ultra 9 275HX / RTX 5070 Ti laptop, ROS 2 Humble (Fast DDS), CARLA 0.9.16.
+Full write-up and raw data: [`bench/results/2026-09-26/`](bench/results/2026-09-26/README.md).
+
+| Metric | Overlay published as topic | Overlay saved as PNG (default) |
+|---|---|---|
+| Sustained FPS, replay at 30 / 60 FPS | **29.9 / 60.1** (ceiling ≈ 79) | 9.3 / 11.6 |
+| Processing latency p50 / p95 / p99 (live) | **7.2 / 8.8 / 9.6 ms** | 69 / 79 / 104 ms |
+| End-to-end latency p50 / p95 / p99 (live) | 28 / 153 / 187 ms | 333 / 366 / 460 ms |
+| Dropped frames (live, 90 s) | **0.09 %** (3,512 / 3,515) | 61 % (1,203 / 3,102) |
+| `projection_node` CPU (avg / peak) | 52 % / 90 % of one core | 97 % / 106 % |
+| `projection_node` RAM (steady / peak) | 183 / 227 MB | 220 / 221 MB |
+
+Findings:
+- The projection itself costs ~3 ms; writing a 1080p PNG every frame is the bottleneck.
+- End-to-end tail latency comes from ROS transport of 6 MB images between processes (~25 ms p50, 110–190 ms p95).
+- `sensor_manager` uses a full core (~100 %) at ~39 camera FPS and is the next throughput ceiling.
+
+Reproduce:
+
+```bash
+bench/run_projection_bench.sh <bag> <out_dir> 60 3000 false /carla/camera/rgb/overlay   # replay
+bench/run_live_bench.sh <out_dir> 90 false /carla/camera/rgb/overlay                    # live (CARLA running)
+python3 bench/report.py <out_dir> [...]
+```
+
+---
+
+## Perception Dataset Recording
+
+`tools/record_drive.py` records drives for evaluating 2D detectors and trackers against simulator ground truth.
+It runs CARLA in **synchronous mode at 20 Hz**, so every image and every actor box belong to the same simulation tick.
+RGB, depth and semantic-segmentation cameras share the ego camera rig used by `sensor_manager`
+(x = 1.5 m, z = 2.4 m, 1920×1080, FOV 90°).
+
+```bash
+python3 tools/record_drive.py --out recordings/clear --weather clear --frames 600
+python3 tools/record_drive.py --out recordings/night --weather night --frames 600
+```
+
+Traffic (default 80 vehicles, 200 pedestrians, 60 % of them crossing roads) is spawned around the ego vehicle, and
+traffic lights are frozen green (`--red-lights` keeps normal lights) so the ego keeps moving. The CARLA world is
+returned to asynchronous mode and all actors are destroyed on exit.
+
+Output per drive:
+
+```
+recordings/<drive>/
+├── drive.json        # map, weather, fps, image size, fov, K, camera mount, seed, traffic settings
+├── meta.jsonl        # per frame: CARLA frame id, sim time, camera + ego pose, ego speed,
+│                     #   and every vehicle / pedestrian within 120 m (id, class, type, semantic tags,
+│                     #   8 world-frame bounding-box corners)
+├── rgb/NNNNNN.png        # 8-bit BGR
+├── depth/NNNNNN.png      # 16-bit depth in centimetres (clipped at 655.35 m)
+└── semantic/NNNNNN.png   # CARLA semantic tag per pixel
+```
+
+`recordings/` is git-ignored (a drive is several GB); keep it on a large disk and symlink it into the package.
+
+**Recorded drives (2026-10-15, Town01, seed 7):**
+
+| Drive | Frames | Duration | Ego distance | Ego stopped | Actors within 120 m (median) | Size |
+|---|---|---|---|---|---|---|
+| clear (ClearNoon) | 600, contiguous | 30 s | 140 m | 2 % of frames | 47 vehicles, 97 pedestrians | 3.1 GB |
+| night (ClearNight) | 600, contiguous | 30 s | 140 m | 2 % of frames | 47 vehicles, 97 pedestrians | 2.5 GB |
+
+With the same seed in synchronous mode, both drives replay the same traffic frame for frame, so day/night
+differences in detection come from lighting alone.
+
+![Clear vs night frames with semantic segmentation](docs/perception_drive_preview.jpg)
+
+---
+
+## Roadmap
+
+| Phase | Status |
+|---|---|
+| Sensor pipeline, LiDAR→camera projection, multi-sensor Kalman filter | Done |
+| Projection pipeline benchmark (FPS, latency, drops, CPU/RAM) | Done |
+| Perception 1 — synchronous day/night drive recording with ground-truth actor boxes | Done |
+| Perception 2 — 2D ground-truth boxes (corner projection + visible-pixel refinement) | Next |
+| Perception 3 — YOLOv8s vs RT-DETR-L detector node (`vision_msgs/Detection2DArray`) and timing | Planned |
+| Perception 4 — detector grading: AP, mAP@0.5, mAP@0.5:0.95, checked against pycocotools | Planned |
+| Perception 5 — SORT-style image tracker: ID switches and MOTA | Planned |
+| Perception 6 — live demo and day/night model recommendation | Planned |
 
 ---
 
